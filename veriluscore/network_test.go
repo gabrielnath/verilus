@@ -47,8 +47,8 @@ func TestAnalyzeNetwork(t *testing.T) {
 			ip:           "192.168.1.103",
 			hasRTSP:      false,
 			hasONVIF:     false,
-			wantCategory: ThreatNone,
-			wantSeverity: 0,
+			wantCategory: "Identified Node", // AnalyzeNetwork() always returns a Threat; unknown safe devices return this sentinel
+			wantSeverity: 1,
 		},
 		{
 			name:         "Malformed MAC (Safely Ignored)",
@@ -56,8 +56,8 @@ func TestAnalyzeNetwork(t *testing.T) {
 			ip:           "192.168.1.104",
 			hasRTSP:      false,
 			hasONVIF:     false,
-			wantCategory: ThreatNone,
-			wantSeverity: 0,
+			wantCategory: "Identified Node",
+			wantSeverity: 1,
 		},
 	}
 

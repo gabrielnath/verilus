@@ -16,15 +16,22 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.util.isNotEmpty
+import com.example.verilus.util.SentryLogger
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import veriluscore.Veriluscore
 import veriluscore.Threat
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * SurveillanceService is the Native Bridge layer responsible for persistent
@@ -39,15 +46,50 @@ class SurveillanceService : Service() {
         private const val NOTIFICATION_ID = 101
         private const val CHANNEL_ID = "VERILUS_SENTRY_CHANNEL"
         private const val TAG = "SurveillanceService"
-        
-        // Flow to emit threats directly to the Main UI
-        private val _threatEvents = MutableSharedFlow<Threat>(extraBufferCapacity = 50)
+
+        // Shared flow for real-time threat events — consumed by the Dashboard.
+        private val _threatEvents = MutableSharedFlow<Threat>(replay = 0, extraBufferCapacity = 50)
         val threatEvents: SharedFlow<Threat> = _threatEvents
+
+        // StateFlow that the Dashboard derives its running indicator from.
+        // Survives screen rotation and process restoration unlike local `remember` state.
+        private val _isRunning = MutableStateFlow(false)
+        val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
+
+        /**
+         * Public API for external sources (e.g., NetworkSniffer) to push a
+         * detected threat into the same UI stream as BLE events.
+         */
+        fun emitThreat(threat: Threat) {
+            _threatEvents.tryEmit(threat)
+        }
     }
 
     private var bluetoothAdapter: BluetoothAdapter? = null
     private var bleScanner: BluetoothLeScanner? = null
-    private var isScanning = false
+    // AtomicBoolean prevents a read-modify-write race between onStartCommand (main thread)
+    // and the BLE scan callback (Binder thread).
+    private val isScanning = AtomicBoolean(false)
+
+    // D-5: Two-phase scan engine.
+    // Phase 1: LOW_LATENCY for the first 30 seconds to catch nearby threats immediately.
+    // Phase 2: Switch to BALANCED to preserve battery for extended protection sessions.
+    private val scanModeHandler = Handler(Looper.getMainLooper())
+    // The Runnable is a thin dispatcher. The actual BLE calls live in the annotated fun below,
+    // which is the only correct way to apply @SuppressLint to a Runnable body.
+    private val switchToBalancedRunnable = Runnable { switchToBalancedMode() }
+
+    @SuppressLint("MissingPermission")
+    private fun switchToBalancedMode() {
+        if (!isScanning.get() || !hasBlePermissions()) return
+        bleScanner?.stopScan(scanCallback)
+        val balancedSettings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
+            .build()
+        bleScanner?.startScan(emptyList(), balancedSettings, scanCallback)
+        SentryLogger.log("SYS: Scan mode shifted to BALANCED — battery conservation active.")
+        Log.i(TAG, "Phase 2: BLE scan downgraded to BALANCED mode.")
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -70,19 +112,25 @@ class SurveillanceService : Service() {
 
     @SuppressLint("MissingPermission")
     private fun startProtection() {
-        if (isScanning) return
-        
+        // compareAndSet(false, true) atomically starts scanning only if not already running.
+        if (!isScanning.compareAndSet(false, true)) return
+
         // 1. Promote to Foreground Service to prevent OS killing the scanner
         startForeground(NOTIFICATION_ID, buildNotification())
+        SentryLogger.log("SYS: Verilus Forensic Engine Online.")
+        _isRunning.value = true
 
         // 2. Validate Permissions before accessing hardware
         if (!hasBlePermissions()) {
             Log.e(TAG, "Insufficient BLE permissions to start scan.")
+            isScanning.set(false)
+            _isRunning.value = false
             stopSelf()
             return
         }
 
         // 3. Configure the Native Hardware Bridge
+        // Phase 1: LOW_LATENCY for the first 30s, then switch to BALANCED in a follow-up sprint.
         val scanSettings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
@@ -92,20 +140,26 @@ class SurveillanceService : Service() {
         // Rely on veriluscore (Go) to handle the O(1) matching.
 
         bleScanner?.startScan(filters, scanSettings, scanCallback)
-        isScanning = true
-        Log.i(TAG, "Verilus bridge activated. BLE scanner running.")
+        // Schedule Phase 2: gracefully reduce to BALANCED mode after 30 seconds.
+        scanModeHandler.postDelayed(switchToBalancedRunnable, 30_000L)
+        Log.i(TAG, "Verilus bridge activated. BLE scanner running (Phase 1: LOW_LATENCY).")
     }
 
     @SuppressLint("MissingPermission")
     private fun stopProtection() {
+        // Cancel any pending scan mode transitions.
+        scanModeHandler.removeCallbacks(switchToBalancedRunnable)
+
         if (hasBlePermissions()) {
             bleScanner?.stopScan(scanCallback)
         }
-        
+
         // FFI Memory Sanitization: Trigger the Go GC to wipe orphaned bytes
         Veriluscore.scrub()
-        
-        isScanning = false
+
+        isScanning.set(false)
+        _isRunning.value = false
+        SentryLogger.log("SYS: Forensic Engine Offline. Releasing listeners.")
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
         Log.i(TAG, "Verilus bridge deactivated.")
@@ -148,11 +202,30 @@ class SurveillanceService : Service() {
         // We pipe the raw bytes to the Go core via the bound AAR framework.
 
         val uuidsCSV = uuids.joinToString(",")
-        // We pack the Bluetooth Hardware Address (MAC) into the UUID string to maintain AAR compatibility
-        val packedPayload = "$uuidsCSV;${result.device.address}"
-        val threat = Veriluscore.analyze(manDataBytes, packedPayload, result.rssi.toLong())
+        // Bridge payload format: "uuids;MAC;DeviceName"
+        // The device name enables name-pattern detection in the Go engine for brands
+        // (Parrot, Skydio, XREAL, Snap) that don't have registered BLE Manufacturer IDs.
+        val deviceName = record.deviceName ?: ""
+        val packedPayload = "$uuidsCSV;${result.device.address};$deviceName"
+
+        // H-5: Use the actual Tx power broadcast by the device for accurate distance estimation.
+        // Android returns Integer.MIN_VALUE when txPowerLevel is absent — sanitize to 0
+        // so the Go engine uses its -59 dBm fallback rather than producing a NaN distance.
+        val rawTxPower = record.txPowerLevel
+        val txPower = if (rawTxPower < -100 || rawTxPower > 20) 0 else rawTxPower
+
+        val threat = Veriluscore.analyze(manDataBytes, packedPayload, result.rssi.toLong(), txPower.toLong())
         
-        if (threat != null && threat.category != "Unknown") {
+        if (threat != null) {
+            SentryLogger.log("BLE: Intercepted payload from ${result.device.address}")
+            if (manDataBytes != null) {
+                val hexPayload = manDataBytes.joinToString("") { String.format("%02X", it) }
+                SentryLogger.log("BLE: [Raw] Payload Header: 0x${hexPayload.take(12)}...")
+            }
+            
+            SentryLogger.log("BLE: [Evidence] Proximity: ${result.rssi} dBm | Logic: ${threat.brand}")
+            SentryLogger.log("BLE: [Verdict] ${threat.category.uppercase()} (Conf: ${(threat.confidence * 100).toInt()}%)")
+            
             Log.w(TAG, "THREAT DETECTED: ${threat.category} (Severity: ${threat.severity} Distance: ${threat.distance}m)")
             
             // Emit to the StateFlow so the Dashboard draws the Radar immediately

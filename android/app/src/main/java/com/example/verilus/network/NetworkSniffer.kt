@@ -1,6 +1,7 @@
 package com.example.verilus.network
 
 import android.util.Log
+import com.example.verilus.util.SentryLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -34,6 +35,7 @@ class NetworkSniffer {
         }
 
         Log.i(TAG, "Initializing Subnet Sweep on: $baseIp.0/24")
+        SentryLogger.log("NET: Forensic sweep started on $baseIp.0/24")
 
         withContext(Dispatchers.IO) {
             // Generate a massive pool of concurrent coroutines (254 IPs)
@@ -48,12 +50,22 @@ class NetworkSniffer {
                     val macAddress = resolveARP(targetIp)
 
                     if (hasRTSP || hasONVIF || macAddress != "00:00:00:00:00:00") {
-                        // Pass native hardware socket results down to Go logic core
-                        // Pack the IP into the MAC string to maintain AAR binary compatibility
+                        SentryLogger.log("NET: Handshake evaluation for $targetIp...")
+                        if (hasRTSP) SentryLogger.log("NET: [+] RTSP Protocol verified on port 554")
+                        if (hasONVIF) SentryLogger.log("NET: [+] ONVIF Profile-S responded on port 3702")
+
                         val threat = Veriluscore.analyzeNetwork("$macAddress;$targetIp", hasRTSP, hasONVIF)
-                        
-                        if (threat != null && threat.category != "Unknown") {
-                           Log.w(TAG, "🚨 NETWORK THREAT DETECTED -> IP: $targetIp MAC: $macAddress | Threat: ${threat.category} (Severity: ${threat.severity})")
+
+                        if (threat != null) {
+                            val brandName = threat.brand.ifEmpty { "Unknown" }
+                            SentryLogger.log("NET: Engine correlation Complete -> $brandName node identified.")
+                            SentryLogger.log("NET: [Verdict] ${threat.category.uppercase()} (Conf: ${(threat.confidence * 100).toInt()}%)")
+
+                            // Emit to the shared threat stream so the Dashboard renders it.
+                            // Only emit if severity > 1 to suppress noise from generic safe nodes.
+                            if (threat.severity > 1) {
+                                com.example.verilus.services.SurveillanceService.emitThreat(threat)
+                            }
                         }
                     }
                 }
@@ -62,6 +74,7 @@ class NetworkSniffer {
             // Await all parallel sweeps
             deferredTasks.awaitAll()
             Log.i(TAG, "Subnet Sweep Complete.")
+            SentryLogger.log("NET: Forensic sweep complete. Analysis engine idle.")
         }
     }
 
@@ -117,20 +130,21 @@ class NetworkSniffer {
      */
     private fun resolveARP(ip: String): String {
         try {
-            val br = java.io.BufferedReader(java.io.FileReader("/proc/net/arp"))
-            var line: String?
-            while (br.readLine().also { line = it } != null) {
-                val splitted = line!!.split(" +".toRegex()).toTypedArray()
-                if (splitted.size >= 4 && ip == splitted[0]) {
-                    val mac = splitted[3]
-                    if (mac.matches(Regex("..:..:..:..:..:.."))) {
-                        return mac
+            // .use{} ensures the FileReader is closed even if an exception is thrown mid-read.
+            java.io.BufferedReader(java.io.FileReader("/proc/net/arp")).use { br ->
+                var line: String?
+                while (br.readLine().also { line = it } != null) {
+                    val splitted = line!!.split(" +".toRegex()).toTypedArray()
+                    if (splitted.size >= 4 && ip == splitted[0]) {
+                        val mac = splitted[3]
+                        if (mac.matches(Regex("..:..:..:..:..:.."))) {
+                            return mac
+                        }
                     }
                 }
             }
-            br.close()
         } catch (_: Exception) {
-            // ARP read denied or file not accessible
+            // ARP read denied or file not accessible — expected on Android 11+
         }
         return "00:00:00:00:00:00"
     }

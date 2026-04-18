@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -16,14 +17,22 @@ class MainActivity : ComponentActivity() {
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { _ ->
-        // Handle post-permission request UI changes if needed
+    ) { results ->
+        val allGranted = results.values.all { it }
+        if (!allGranted) {
+            // Inform the user that degraded functionality will result
+            Toast.makeText(
+                this,
+                "Bluetooth & Location permissions are required for threat detection.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        
+
         requestNecessaryPermissions()
 
         setContent {
@@ -36,11 +45,21 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Toggles the SurveillanceService.
+     * IMPORTANT: startForegroundService() must ONLY be called when starting.
+     * Calling it for a stop action causes an ANR crash on Android 14+ because
+     * the service receives ACTION_STOP and never calls startForeground().
+     */
     private fun toggleService(start: Boolean) {
         val intent = Intent(this, SurveillanceService::class.java).apply {
             action = if (start) SurveillanceService.ACTION_START else SurveillanceService.ACTION_STOP
         }
-        startForegroundService(intent)
+        if (start) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
     }
 
     private fun requestNecessaryPermissions() {
@@ -57,7 +76,7 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
         }
-        
+
         permissionLauncher.launch(permissionsToRequest.toTypedArray())
     }
 }

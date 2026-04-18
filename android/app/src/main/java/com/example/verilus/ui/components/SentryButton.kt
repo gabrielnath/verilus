@@ -12,6 +12,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -32,9 +34,16 @@ fun SentryButton(
     val finalContainerColor = containerColor ?: if (isFullWidth) TextPrimary else SurfaceSubtle
     val finalContentColor = contentColor ?: if (isFullWidth) Color.White else TextPrimary
     val finalIconColor = iconColor ?: if (isFullWidth) VerilusSage else VerilusSageDark
+    val haptic = LocalHapticFeedback.current
 
     Surface(
-        onClick = onClick,
+        onClick = {
+            // Card-style buttons are high-stakes actions — use a stronger haptic pulse.
+            haptic.performHapticFeedback(
+                if (useCardStyle) HapticFeedbackType.LongPress else HapticFeedbackType.TextHandleMove
+            )
+            onClick()
+        },
         modifier = modifier
             .fillMaxWidth()
             .then(if (useCardStyle) Modifier.height(100.dp) else Modifier.height(60.dp)),

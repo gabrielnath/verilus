@@ -1,12 +1,17 @@
 package com.example.verilus.ui.screens
 
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.provider.Settings
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
+import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -17,12 +22,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.*
+import androidx.compose.ui.platform.LocalContext
 import com.example.verilus.services.SurveillanceService
 import com.example.verilus.ui.components.SentryButton
 import com.example.verilus.ui.components.ThreatItem
 import com.example.verilus.ui.theme.*
+import com.example.verilus.util.SentryLogger
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -33,17 +40,58 @@ fun OperationsDashboard(
     onStartClick: () -> Unit,
     onStopClick: () -> Unit
 ) {
-    var isRunning by remember { mutableStateOf(false) }
+    // Derived from the service StateFlow — survives screen rotation and reflects actual service state.
+    val isRunning by SurveillanceService.isRunning.collectAsState()
     var isNetworkScanning by remember { mutableStateOf(false) }
     var isBleScanning by remember { mutableStateOf(false) }
-    
+    var selectedTab by remember { mutableIntStateOf(0) } // 0: Live, 1: Log
+
     val coroutineScope = rememberCoroutineScope()
     val threats = remember { mutableStateListOf<veriluscore.Threat>() }
+    val logEvents by SentryLogger.events.collectAsState(initial = "Initializing Verilus Engine...")
+    val consoleLogs = remember { mutableStateListOf<String>() }
+    // Stored so the scan coroutine can be cancelled on stop or disposal.
+    var networkScanJob by remember { mutableStateOf<Job?>(null) }
+
+    // D-4: Monitor BLE adapter state in real time using a system BroadcastReceiver.
+    val context = LocalContext.current
+    var isBleSupported by remember { mutableStateOf(true) }
+    var isBleEnabled by remember { mutableStateOf(true) }
+    DisposableEffect(context) {
+        val bluetoothManager = context.getSystemService(BluetoothManager::class.java)
+        val adapter = bluetoothManager?.adapter
+        isBleSupported = adapter != null
+        isBleEnabled = adapter?.isEnabled == true
+
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) {
+                if (intent.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
+                    val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+                    isBleEnabled = state == BluetoothAdapter.STATE_ON
+                }
+            }
+        }
+        context.registerReceiver(receiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
+        onDispose { context.unregisterReceiver(receiver) }
+    }
+
+    // Accumulate logs
+    LaunchedEffect(logEvents) {
+        if (logEvents.isNotEmpty()) {
+            consoleLogs.add(0, logEvents)
+            if (consoleLogs.size > 50) consoleLogs.removeAt(50)
+        }
+    }
 
     // Subscribe to real threat events
     LaunchedEffect(Unit) {
         SurveillanceService.threatEvents.collect { threat ->
-            if (threats.none { it.category == threat.category }) {
+            // Filter only if the exact physical device (MAC/IP) is already present
+            val isDuplicate = threats.any { 
+                (threat.mac.isNotEmpty() && it.mac == threat.mac) || 
+                (threat.ip.isNotEmpty() && it.ip == threat.ip) 
+            }
+            if (!isDuplicate) {
                 threats.add(0, threat)
             }
         }
@@ -126,11 +174,62 @@ fun OperationsDashboard(
 
             HorizontalDivider(color = BorderSubtle, thickness = 1.dp)
 
+            // D-4: BLE Hardware Warning Banner
+            if (!isBleSupported || !isBleEnabled) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = VerilusWarning.copy(alpha = 0.08f)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                if (!isBleSupported) return@clickable
+                                context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+                            }
+                            .padding(horizontal = 24.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isBleSupported) Icons.Default.BluetoothDisabled else Icons.Default.ErrorOutline,
+                            contentDescription = "Bluetooth warning",
+                            tint = VerilusWarning,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (isBleSupported) "Bluetooth Is Disabled" else "Bluetooth Not Supported",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 11.sp
+                                ),
+                                color = VerilusWarning
+                            )
+                            Text(
+                                text = if (isBleSupported) "BLE scanning requires Bluetooth. Tap to enable." else "This device cannot scan for BLE threats.",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = TextSecondary
+                            )
+                        }
+                        if (isBleSupported) {
+                            Icon(
+                                imageVector = Icons.Default.ChevronRight,
+                                contentDescription = null,
+                                tint = TextSecondary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+                HorizontalDivider(color = BorderSubtle, thickness = 1.dp)
+            }
+
             // Hero Data
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 32.dp)
+                    .padding(horizontal = 24.dp, vertical = 16.dp)
             ) {
                 Text(
                     text = String.format(Locale.getDefault(), "%02d", threats.size),
@@ -163,9 +262,9 @@ fun OperationsDashboard(
                         onClick = {
                             if (isNetworkScanning) return@SentryButton
                             isNetworkScanning = true
-                            coroutineScope.launch {
+                            networkScanJob = coroutineScope.launch {
                                 delay(1500)
-                                try { com.example.verilus.network.NetworkSniffer().scanLocalNetwork() } 
+                                try { com.example.verilus.network.NetworkSniffer().scanLocalNetwork() }
                                 finally { isNetworkScanning = false }
                             }
                         },
@@ -176,55 +275,41 @@ fun OperationsDashboard(
                     SentryButton(
                         text = if (isRunning) "Stop Scan" else "Active Scan",
                         onClick = {
+                            if (!isBleEnabled || !isBleSupported) return@SentryButton
                             if (isRunning) {
+                                networkScanJob?.cancel()
                                 onStopClick()
-                                isRunning = false
                             } else {
                                 isBleScanning = true
                                 coroutineScope.launch {
                                     delay(1500)
                                     onStartClick()
                                     isBleScanning = false
-                                    isRunning = true
                                 }
                             }
                         },
                         modifier = Modifier.weight(1f),
-                        icon = Icons.Default.Bluetooth,
+                        icon = if (!isBleEnabled || !isBleSupported) Icons.Default.BluetoothDisabled else Icons.Default.Bluetooth,
                         useCardStyle = true,
-                        containerColor = if (isRunning) Color(0xFFFFF0F0) else null,
-                        contentColor = if (isRunning) VerilusDanger else null,
-                        iconColor = if (isRunning) VerilusDanger else null
+                        containerColor = when {
+                            !isBleEnabled || !isBleSupported -> SurfaceSubtle
+                            isRunning -> Color(0xFFFFF0F0)
+                            else -> null
+                        },
+                        contentColor = when {
+                            !isBleEnabled || !isBleSupported -> TextSecondary
+                            isRunning -> VerilusDanger
+                            else -> null
+                        },
+                        iconColor = when {
+                            !isBleEnabled || !isBleSupported -> TextSecondary
+                            isRunning -> VerilusDanger
+                            else -> null
+                        }
                     )
                 }
-                Spacer(modifier = Modifier.height(12.dp))
-                SentryButton(
-                    text = "System Integrity Test",
-                    onClick = {
-                        coroutineScope.launch {
-                            delay(500)
-                            // Simulate raw hardware packets piped through Go Logic
-                            val metaPack = byteArrayOf(0x7D.toByte(), 0x02.toByte(), 0x01)
-                            val metaThreat = veriluscore.Veriluscore.analyze(metaPack, "FF01;EB:04:1A:66:BD:22", -42)
-                            
-                            val djiPack = byteArrayOf(0xAA.toByte(), 0x08.toByte())
-                            val djiThreat = veriluscore.Veriluscore.analyze(djiPack, "FF6B;D4:8C:81:AA:BB:CC", -75)
-
-                            val tagPack = byteArrayOf(0x4C.toByte(), 0x00.toByte(), 0x12.toByte())
-                            val tagThreat = veriluscore.Veriluscore.analyze(tagPack, "FD69;50:D4:F7:11:22:33", -60)
-
-                            val camThreat = veriluscore.Veriluscore.analyzeNetwork("0C:75:D2:11:22:33;192.168.1.104", true, false)
-
-                            listOfNotNull(metaThreat, djiThreat, tagThreat, camThreat).forEach { threat ->
-                                if (threat.category != "Unknown" && threats.none { it.category == threat.category }) {
-                                    threats.add(0, threat)
-                                }
-                            }
-                        }
-                    },
-                    icon = Icons.Default.Shield,
-                    isFullWidth = true
-                )
+                // System Integrity Test removed — re-enable when feature is implemented.
+                // Never ship a non-functional button to market.
                 
                 Spacer(modifier = Modifier.height(16.dp))
                 Row(
@@ -254,12 +339,13 @@ fun OperationsDashboard(
             ) {
                 Column(
                     modifier = Modifier
-                        .fillMaxSize()
+                        .weight(1f)
                         .padding(24.dp)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
                             text = "DISCOVERED HARDWARE",
@@ -270,79 +356,128 @@ fun OperationsDashboard(
                             ),
                             color = TextSecondary
                         )
-                        Text(
-                            text = if (isNetworkScanning || isBleScanning) "SCANNING" else "LIVE",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp
-                            ),
-                            color = if (isNetworkScanning || isBleScanning) VerilusWarning else VerilusSageDark
-                        )
+
+                        // Compact Mode Switcher
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .background(SurfaceSubtle, RoundedCornerShape(100.dp))
+                                .padding(2.dp)
+                        ) {
+                            listOf("LIVE", "LOG").forEachIndexed { index, title ->
+                                val isSelected = selectedTab == index
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(100.dp))
+                                        .background(if (isSelected) Color.White else Color.Transparent)
+                                        .clickable { selectedTab = index }
+                                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = title,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Bold,
+                                            fontSize = 9.sp
+                                        ),
+                                        color = if (isSelected) TextPrimary else TextSecondary
+                                    )
+                                }
+                            }
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.spacedBy(14.dp),
-                        contentPadding = PaddingValues(bottom = 24.dp)
-                    ) {
-                        if (isNetworkScanning || isBleScanning) {
-                            item {
-                                ThreatItem(
-                                    category = "Filtering noise...",
-                                    distance = 0.0,
-                                    severity = 1,
-                                    modifier = Modifier.background(Color.White)
-                                )
-                            }
-                        }
-                        
-                        if (threats.isEmpty() && !isNetworkScanning && !isBleScanning) {
-                            item {
-                                Box(
-                                    modifier = Modifier.fillMaxWidth().height(140.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                        Icon(
-                                            Icons.Default.Shield,
-                                            contentDescription = null,
-                                            tint = SurfaceSubtle,
-                                            modifier = Modifier.size(48.dp)
-                                        )
-                                        Spacer(modifier = Modifier.height(12.dp))
-                                        Text(
-                                            text = "Surroundings Secure",
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                            color = TextSecondary
-                                        )
-                                        Text(
-                                            text = "No unauthorized signals found.",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = TextSecondary
-                                        )
-                                    }
+                    if (selectedTab == 0) {
+                        // LIVE VIEW
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(14.dp),
+                            contentPadding = PaddingValues(bottom = 24.dp)
+                        ) {
+                            if (isNetworkScanning || isBleScanning) {
+                                item {
+                                    ThreatItem(
+                                        category = "Filtering noise...",
+                                        distance = 0.0,
+                                        severity = 1,
+                                        modifier = Modifier.background(Color.White)
+                                    )
                                 }
                             }
-                        } else {
-                            items(
-                                items = threats,
-                                key = { it.category }
-                            ) { threat ->
-                                ThreatItem(
-                                    category = threat.category,
-                                    distance = threat.distance,
-                                    severity = threat.severity.toInt(),
-                                    brand = threat.brand,
-                                    ip = threat.ip,
-                                    mac = threat.mac,
-                                    modifier = Modifier.animateItem(
-                                        fadeInSpec = tween(500),
-                                        fadeOutSpec = tween(500),
-                                        placementSpec = tween(500)
+                            
+                            if (threats.isEmpty() && !isNetworkScanning && !isBleScanning) {
+                                item {
+                                    Box(
+                                        modifier = Modifier.fillMaxWidth().height(140.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Icon(
+                                                Icons.Default.Shield,
+                                                contentDescription = null,
+                                                tint = SurfaceSubtle,
+                                                modifier = Modifier.size(48.dp)
+                                            )
+                                            Spacer(modifier = Modifier.height(12.dp))
+                                            Text(
+                                                text = "Surroundings Secure",
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                                color = TextSecondary
+                                            )
+                                            Text(
+                                                text = "No unauthorized signals found.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = TextSecondary
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                items(
+                                    items = threats,
+                                    key = { "${it.category}-${it.mac}-${it.ip}" }
+                                ) { threat ->
+                                    ThreatItem(
+                                        category = threat.category,
+                                        distance = threat.distance,
+                                        severity = threat.severity.toInt(),
+                                        confidence = threat.confidence,
+                                        brand = threat.brand,
+                                        ip = threat.ip,
+                                        mac = threat.mac,
+                                        profile = threat.profile,
+                                        modifier = Modifier.animateItem(
+                                            fadeInSpec = tween(500),
+                                            fadeOutSpec = tween(500),
+                                            placementSpec = tween(500)
+                                        )
                                     )
-                                )
+                                }
+                            }
+                        }
+                    } else {
+                        // LOG VIEW
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color(0xFF0A0A0A), RoundedCornerShape(12.dp))
+                                .padding(12.dp)
+                        ) {
+                            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                                items(consoleLogs) { log ->
+                                    Text(
+                                        text = log,
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                            fontSize = 9.sp,
+                                            lineHeight = 12.sp
+                                        ),
+                                        color = Color(0xFF00FF41).copy(alpha = 0.8f),
+                                        modifier = Modifier.padding(vertical = 2.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -351,6 +486,3 @@ fun OperationsDashboard(
         }
     }
 }
-
-
-

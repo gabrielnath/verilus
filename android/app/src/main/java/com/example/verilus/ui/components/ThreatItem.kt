@@ -27,9 +27,11 @@ fun ThreatItem(
     category: String,
     distance: Double,
     severity: Int,
+    confidence: Double = 0.0,
     brand: String = "",
     ip: String = "",
-    mac: String = ""
+    mac: String = "",
+    profile: String = "SAFE"
 ) {
     val isSevere = severity >= 4
     
@@ -41,14 +43,21 @@ fun ThreatItem(
         ).joinToString("  |  ")
     }
     
-    val proximityText = remember(distance) {
-        if (distance > 0) String.format(Locale.getDefault(), "PROXIMITY: %.1f METERS", distance) else ""
+    val proximityText = remember(distance, confidence) {
+        val confPct = (confidence * 100).toInt()
+        val confStr = if (confPct > 0) "CONFIDENCE: $confPct%" else ""
+        val distStr = if (distance > 0) String.format(Locale.getDefault(), "PROXIMITY: %.1fM", distance) else ""
+        
+        listOfNotNull(
+            distStr.takeIf { it.isNotEmpty() },
+            confStr.takeIf { it.isNotEmpty() }
+        ).joinToString("  |  ")
     }
 
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .graphicsLayer { // Offload to GPU for idk just trying smooth scrolling
+            .graphicsLayer { 
                 shape = RoundedCornerShape(16.dp)
                 clip = true
             }
@@ -121,30 +130,104 @@ fun ThreatItem(
                     color = if (isSevere) VerilusDanger else VerilusSageDark
                 )
             }
+
+            // Disclaimer Footnote
+            Text(
+                text = "Data is an estimation. False positives may occur.",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 8.sp,
+                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                ),
+                color = TextSecondary.copy(alpha = 0.7f)
+            )
         }
 
-        // Tag
+        // Compact Forensic Badge (THREAT / ACTIVE / SAFE)
         Box(
             modifier = Modifier
+                .padding(start = 8.dp)
                 .background(
-                    if (isSevere) Color(0xFFFFF0F0) else SurfaceSubtle,
-                    RoundedCornerShape(6.dp)
+                    color = when (profile) {
+                        "BAD_ACTOR" -> VerilusDanger.copy(alpha = 0.1f)
+                        "SURVEILLANCE" -> VerilusWarning.copy(alpha = 0.1f)
+                        else -> VerilusSage.copy(alpha = 0.1f)
+                    },
+                    shape = RoundedCornerShape(6.dp)
                 )
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         ) {
             Text(
-                text = if (isSevere) "THREAT" else if (severity > 0) "ACTIVE" else "SECURE",
+                text = when (profile) {
+                    "BAD_ACTOR" -> "THREAT"
+                    "SURVEILLANCE" -> "ACTIVE"
+                    else -> "SAFE"
+                },
                 style = MaterialTheme.typography.labelSmall.copy(
                     fontWeight = FontWeight.ExtraBold,
-                    fontSize = 10.sp
+                    fontSize = 10.sp,
+                    letterSpacing = 0.5.sp
                 ),
-                color = if (isSevere) VerilusDanger else if (severity > 0) VerilusSageDark else TextSecondary
+                color = when (profile) {
+                    "BAD_ACTOR" -> VerilusDanger
+                    "SURVEILLANCE" -> VerilusWarning
+                    else -> VerilusSageDark
+                }
             )
         }
     }
 }
 
+@androidx.compose.ui.tooling.preview.Preview(showBackground = true)
+@Composable
+fun ThreatItemGallery() {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFFF9FAFB))
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = "FORENSIC UI GALLERY",
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 1.sp
+            ),
+            color = TextSecondary,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
 
+        // 1. THREAT (Red) - AirTag
+        ThreatItem(
+            category = "AirTag / Tracker",
+            distance = 1.2,
+            severity = 5,
+            confidence = 0.95,
+            brand = "Apple, Inc.",
+            mac = "3C:D0:F8:11:22:33",
+            profile = "BAD_ACTOR"
+        )
 
+        // 2. ACTIVE (Orange) - Hikvision
+        ThreatItem(
+            category = "Network Camera",
+            distance = 4.5,
+            severity = 3,
+            confidence = 0.88,
+            brand = "Hikvision",
+            ip = "192.168.1.104",
+            profile = "SURVEILLANCE"
+        )
 
-
+        // 3. SECURE / IDENTIFIED (Green) - AirPods
+        ThreatItem(
+            category = "Audio Device",
+            distance = 0.8,
+            severity = 1,
+            confidence = 0.99,
+            brand = "Apple, Inc.",
+            mac = "0C:75:D2:AA:BB:CC",
+            profile = "SAFE"
+        )
+    }
+}

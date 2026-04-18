@@ -45,14 +45,14 @@ func TestAnalyze(t *testing.T) {
 			manData:      []byte{0x00, 0x11},
 			uuidsCSV:     "1234",
 			rssi:         -55,
-			wantCategory: ThreatNone,
+			wantCategory: "Identified Signal", // Analyze() always returns non-nil; unknown signals return this sentinel
 		},
 		{
 			name:         "Empty Data",
 			manData:      nil,
 			uuidsCSV:     "",
 			rssi:         -90,
-			wantCategory: ThreatNone,
+			wantCategory: "Identified Signal",
 		},
 		{
 			name:         "Packed MAC",
@@ -65,7 +65,7 @@ func TestAnalyze(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Analyze(tt.manData, tt.uuidsCSV, tt.rssi)
+			got := Analyze(tt.manData, tt.uuidsCSV, tt.rssi, 0)
 			if got.Category != tt.wantCategory {
 				t.Errorf("Analyze() Category = %v, want %v", got.Category, tt.wantCategory)
 			}

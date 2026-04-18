@@ -1,21 +1,32 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# ============================================================
+#  Verilus — Production ProGuard / R8 Rules
+#  IMPORTANT: These rules are required for the gomobile AAR
+#  bridge to function correctly after R8 obfuscation.
+# ============================================================
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# ── gomobile AAR Bridge ──────────────────────────────────
+# Preserve the entire public surface of the compiled Go AAR.
+# Removing or renaming these classes will break the FFI layer.
+-keep class veriluscore.** { *; }
+-keepclassmembers class veriluscore.** { *; }
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# ── Kotlin Coroutines ────────────────────────────────────
+-keepclassmembers class kotlinx.coroutines.** { volatile <fields>; }
+-keepclassmembernames class kotlinx.** { volatile <fields>; }
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# ── Jetpack Compose ──────────────────────────────────────
+# Compose is already handled by the Compose compiler plugin,
+# but keeping these prevents R8 from stripping runtime helpers.
+-keep class androidx.compose.** { *; }
+-dontwarn androidx.compose.**
+
+# ── AndroidX Core / Activity ────────────────────────────
+-keep class androidx.core.** { *; }
+
+# ── Crash Reporting: Preserve Stack Traces ──────────────
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
+
+# ── Suppress warnings from Go runtime stubs ─────────────
+-dontwarn go.**
+-dontwarn veriluscore.**
