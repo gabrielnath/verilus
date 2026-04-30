@@ -242,7 +242,7 @@ class SurveillanceService : Service() {
     @SuppressLint("MissingPermission")
     private fun alertUser(category: String, distance: Double) {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("🚨 Threat Detected: $category")
+            .setContentTitle("Threat Detected: $category")
             .setContentText("Estimated proximity: $distance meters.")
             .setSmallIcon(android.R.drawable.ic_secure)
             .setPriority(NotificationCompat.PRIORITY_MAX) // Heads-up alert
@@ -276,10 +276,12 @@ class SurveillanceService : Service() {
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "Verilus Background Protection",
-            NotificationManager.IMPORTANCE_LOW
+            "Verilus Forensic Alerts",
+            NotificationManager.IMPORTANCE_HIGH
         ).apply {
-            description = "Keeps the passive BLE scanner running in the background."
+            description = "High-priority alerts for detected surveillance signals."
+            enableVibration(true)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         }
         val notificationManager = getSystemService(NotificationManager::class.java)
         notificationManager.createNotificationChannel(channel)

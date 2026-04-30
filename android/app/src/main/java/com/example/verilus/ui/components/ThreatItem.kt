@@ -33,7 +33,13 @@ fun ThreatItem(
     mac: String = "",
     profile: String = "SAFE"
 ) {
-    val isSevere = severity >= 4
+    val profileColor = when (profile) {
+        "BAD_ACTOR" -> VerilusDanger
+        "SURVEILLANCE" -> VerilusWarning
+        else -> VerilusSageDark
+    }
+    
+    val isSevere = severity >= 4 || profile == "BAD_ACTOR" || profile == "SURVEILLANCE"
     
     // Formatted details are remembered to prevent re-calculation during scroll
     val forensicDetails = remember(ip, mac) {
@@ -127,7 +133,7 @@ fun ThreatItem(
                         fontSize = 10.sp,
                         letterSpacing = 0.3.sp
                     ),
-                    color = if (isSevere) VerilusDanger else VerilusSageDark
+                    color = if (isSevere) profileColor else VerilusSageDark
                 )
             }
 

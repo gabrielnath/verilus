@@ -27,6 +27,7 @@ fun SentryButton(
     icon: ImageVector? = null,
     isFullWidth: Boolean = false,
     useCardStyle: Boolean = false,
+    iconSideBySide: Boolean = false, // New parameter for wide cards
     containerColor: Color? = null,
     contentColor: Color? = null,
     iconColor: Color? = null
@@ -38,7 +39,6 @@ fun SentryButton(
 
     Surface(
         onClick = {
-            // Card-style buttons are high-stakes actions — use a stronger haptic pulse.
             haptic.performHapticFeedback(
                 if (useCardStyle) HapticFeedbackType.LongPress else HapticFeedbackType.TextHandleMove
             )
@@ -46,12 +46,17 @@ fun SentryButton(
         },
         modifier = modifier
             .fillMaxWidth()
-            .then(if (useCardStyle) Modifier.height(100.dp) else Modifier.height(60.dp)),
+            .then(
+                if (useCardStyle && !iconSideBySide) Modifier.height(100.dp) 
+                else if (useCardStyle && iconSideBySide) Modifier.height(64.dp)
+                else Modifier.height(60.dp)
+            ),
         shape = RoundedCornerShape(20.dp),
         color = finalContainerColor,
-        border = if (!isFullWidth) BorderStroke(1.dp, BorderSubtle) else null
+        border = if (!isFullWidth && containerColor == null) BorderStroke(1.dp, BorderSubtle) else null
     ) {
-        if (useCardStyle) {
+        if (useCardStyle && !iconSideBySide) {
+            // Dashboard Tile Style (Vertical)
             Column(
                 modifier = Modifier.padding(20.dp),
                 verticalArrangement = Arrangement.Center
@@ -75,11 +80,21 @@ fun SentryButton(
                 )
             }
         } else {
+            // Horizontal Style (Side-by-side)
             Row(
+                modifier = Modifier.padding(horizontal = 24.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = if (isFullWidth) Arrangement.SpaceBetween else Arrangement.Center,
-                modifier = Modifier.padding(horizontal = 24.dp)
+                horizontalArrangement = if (isFullWidth) Arrangement.SpaceBetween else Arrangement.Center
             ) {
+                if (icon != null) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = finalIconColor,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                }
                 Text(
                     text = text,
                     style = MaterialTheme.typography.bodyLarge.copy(
@@ -88,17 +103,7 @@ fun SentryButton(
                     ),
                     color = finalContentColor
                 )
-                if (icon != null) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = null,
-                        tint = finalIconColor,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
             }
         }
     }
 }
-
-

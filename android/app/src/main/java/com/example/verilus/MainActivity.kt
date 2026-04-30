@@ -9,6 +9,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Notification
 import com.example.verilus.services.SurveillanceService
 import com.example.verilus.ui.screens.OperationsDashboard
 import com.example.verilus.ui.theme.VerilusTheme
@@ -18,12 +21,10 @@ class MainActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
-        val allGranted = results.values.all { it }
-        if (!allGranted) {
-            // Inform the user that degraded functionality will result
+        if (!results.values.all { it }) {
             Toast.makeText(
                 this,
-                "Bluetooth & Location permissions are required for threat detection.",
+                "Bluetooth, Location, and Audio permissions are required for full forensic detection.",
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -32,7 +33,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-
+        createNotificationChannel()
         requestNecessaryPermissions()
 
         setContent {
@@ -65,7 +66,8 @@ class MainActivity : ComponentActivity() {
     private fun requestNecessaryPermissions() {
         val permissionsToRequest = mutableListOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+            Manifest.permission.RECORD_AUDIO
         )
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -78,5 +80,19 @@ class MainActivity : ComponentActivity() {
         }
 
         permissionLauncher.launch(permissionsToRequest.toTypedArray())
+    }
+
+    private fun createNotificationChannel() {
+        val channel = NotificationChannel(
+            "VERILUS_SENTRY_CHANNEL",
+            "Verilus Forensic Alerts",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "High-priority alerts for detected surveillance signals."
+            enableVibration(true)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        }
+        val notificationManager = getSystemService(NotificationManager::class.java)
+        notificationManager.createNotificationChannel(channel)
     }
 }
