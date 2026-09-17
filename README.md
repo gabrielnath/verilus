@@ -1,7 +1,7 @@
-# 🛡️ Verilus: Mobile Surveillance Sentry
+# Verilus: Mobile Surveillance App
 ![Version](https://img.shields.io/badge/version-1.0.0--stable-blue)
 
-Verilus is a dedicated security utility designed to identify hidden surveillance hardware in your immediate vicinity. By combining a Go-based detection engine with native Android hardware introspection, it scans for covert cameras, tracking devices, drones, and smart glasses.
+Verilus is a dedicated security app designed to identify hidden surveillance hardware in your immediate vicinity. By combining a Go-based detection engine with native Android hardware introspection, it scans for covert cameras, tracking devices, drones, and smart glasses.
 
 ---
 
