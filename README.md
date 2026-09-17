@@ -5,15 +5,15 @@ Verilus is a dedicated security utility designed to identify hidden surveillance
 
 ---
 
-## 🛠️ Architecture
+## Architecture
 
 Verilus uses a **Hybrid Bridge** architecture to ensure logic integrity and portable analysis:
 
-*   **Analysis Core (`veriluscore`)**: A cross-platform engine written in Go. Handles all O(1) pattern matching against manufacturer IDs, service UUIDs, and hardware fingerprints.
-*   **Android Layer**: Manages BLE hardware intercepts, foreground service persistence, and the Jetpack Compose dashboard.
+*   **Analysis Core**: A cross-platform engine written in Go. Handles all O(1) pattern matching against manufacturer IDs, service UUIDs, and hardware fingerprints.
+*   **Android Layer**: Manages BLE (Bluetooth Low Energy) hardware intercepts, foreground service persistence, and the Jetpack Compose dashboard.
 *   **FFI Bridge**: The analysis logic is compiled into a native AAR library via `gomobile`, protecting detection logic from static analysis.
 
-## 🛰️ Technical Capabilities
+## Technical Capabilities
 
 ### Bluetooth Discovery
 *   **Signature Matching**: Recognizes Manufacturer IDs (DJI, Vuzix, Meta, etc.) and Service UUIDs (including FAA Remote ID `FF6B`).
@@ -28,7 +28,7 @@ Verilus uses a **Hybrid Bridge** architecture to ensure logic integrity and port
 
 ---
 
-## 🏗️ Build Instructions
+## Build Instructions
 
 ### Prerequisites
 - Go 1.21+
@@ -47,7 +47,7 @@ cd android && ./gradlew assembleDebug
 
 ---
 
-## 🔒 Privacy & Safety
+## Privacy & Safety
 - **On-Device Analysis**: All analysis is performed locally. No hardware identifiers or locations are ever transmitted off-device.
 - **Memory Sanitization**: Implements immediate memory scrubbing to purge analysis metadata from RAM once protection is deactivated.
 - **Android 14+ Hardened**: Fully compliant with the latest foreground service and permission requirements.
